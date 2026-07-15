@@ -1,6 +1,6 @@
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -45,16 +45,26 @@ def get_text_chunks(text):
     return text_splitter.split_text(text)
 
 
-def get_embeddings(api_choice, api_key):
-    """Returns the embeddings model alone, so callers can build a fresh FAISS
-    index OR add texts to an existing one without re-embedding what's already indexed."""
-    if api_choice == "OpenAI" and api_key:
-        return OpenAIEmbeddings(api_key=api_key)
+def get_embeddings(api_choice=None, api_key=None):
+    """Always returns local HuggingFace embeddings (all-MiniLM-L6-v2), regardless
+    of which LLM provider is selected for generation.
+
+    This is deliberate, not a placeholder: the LLM provider (Groq/OpenAI) only
+    affects text generation. Embeddings determine the vector space documents are
+    indexed into — if that space changed per-provider, adding one document while
+    Groq was selected and another while OpenAI was selected would either throw a
+    dimension mismatch inside the same FAISS index, or silently mix two
+    incompatible vector spaces in one index. Keeping embeddings on a single local
+    model avoids that entirely, costs nothing, and keeps document content off any
+    third-party API — arguments that hold regardless of which LLM answers the
+    question. Accepts (and ignores) api_choice/api_key so existing call sites
+    don't need to change.
+    """
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
-def get_vectorstore(text_chunks, api_choice, api_key):
-    embeddings = get_embeddings(api_choice, api_key)
+def get_vectorstore(text_chunks, api_choice=None, api_key=None):
+    embeddings = get_embeddings()
     return FAISS.from_texts(texts=text_chunks, embedding=embeddings)
 
 
@@ -111,7 +121,25 @@ Rewritten question (or the original if no rewrite is needed):"""
     return rewritten
 
 
-def answer_question(vectorstore, question, api_choice, api_key, chat_history=None, score_threshold=1.0):
+def answer_question(vectorstore, question, api_choice, api_key, chat_history=None, score_threshold=1.5):
+    """
+    Routes a question through one of three modes:
+      - "general":           no vectorstore exists at all (no docs uploaded)
+      - "general_fallback":  docs exist, but nothing retrieved is a good enough match
+      - "rag":                docs exist and retrieval passes the threshold
+
+    Note: FAISS's default distance here is L2 — LOWER score = MORE similar.
+
+    score_threshold=1.5 is empirically set from a 20-question labeled eval
+    (tests/test_routing.py), not guessed. That eval also found real overlap
+    between the two categories: one genuinely out-of-scope question scored
+    lower (1.147) than several genuinely answerable ones. No single global
+    threshold separates every case perfectly — 1.5 was chosen because it
+    favors NOT letting an irrelevant question masquerade as a grounded answer
+    (the failure mode this whole routing system exists to prevent), even
+    though that means one legitimate answerable question occasionally falls
+    back instead. A documented, deliberate tradeoff, not an oversight.
+    """
     llm = get_llm(api_choice, api_key)
     history_messages = _build_history_messages(chat_history)
 

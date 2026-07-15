@@ -5,7 +5,8 @@ langchain-openai==0.3.35
 langchain-groq==0.3.8
 langchain-text-splitters==0.3.11
 faiss-cpu
-PyPDF2
+pytest
+pypdf
 python-dotenv
 sentence-transformers
 fastapi
