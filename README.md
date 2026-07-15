@@ -42,10 +42,11 @@ flowchart TB
     subgraph Indexing["Indexing — runs once, per document upload"]
         direction TB
         Upload(["PDF upload"])
+        Extract(["Extract text"])
         Chunk(["Chunking"])
         EmbedDocs(["Embed chunks"])
         FAISS[("FAISS index")]
-        Upload --> Chunk --> EmbedDocs --> FAISS
+        Upload --> Extract --> Chunk --> EmbedDocs --> FAISS
     end
 
     subgraph Answering["Answering — runs on every question"]
@@ -81,7 +82,7 @@ flowchart TB
     classDef fallback fill:#FAEEDA,stroke:#854F0B,color:#412402
     classDef rag fill:#EAF3DE,stroke:#3B6D11,color:#173404
 
-    class Upload,Chunk,EmbedDocs,FAISS idx
+    class Upload,Extract,Chunk,EmbedDocs,FAISS idx
     class Question,Context,Retrieval,LLM,Answer ans
     class HasDocs,PassesThreshold decision
     class General general
