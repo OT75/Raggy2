@@ -37,6 +37,55 @@ rather than a black box.
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph Client["Client layer"]
+        React["React + TypeScript UI<br/><span style='font-size:11px'>Vite dev server</span>"]
+        Streamlit["Streamlit prototype<br/><span style='font-size:11px'>fallback demo</span>"]
+    end
+
+    subgraph API["Backend"]
+        FastAPI["FastAPI<br/><span style='font-size:11px'>session-based endpoints</span>"]
+        Sessions[("In-memory sessions<br/><span style='font-size:11px'>vectorstore, documents, chat history</span>")]
+    end
+
+    subgraph Core["Core RAG logic — framework-agnostic"]
+        Router["Mode router<br/><span style='font-size:11px'>general / fallback / RAG</span>"]
+        Retrieval["Retrieval<br/><span style='font-size:11px'>FAISS similarity search + threshold</span>"]
+        Context["Query contextualization<br/><span style='font-size:11px'>history-aware rewriting</span>"]
+    end
+
+    subgraph External["External services"]
+        LLM["LLM provider<br/><span style='font-size:11px'>Groq or OpenAI</span>"]
+        Embed["Embeddings<br/><span style='font-size:11px'>HuggingFace local or OpenAI</span>"]
+    end
+
+    React -->|HTTP + FormData| FastAPI
+    Streamlit -.->|direct import, no HTTP| Router
+    FastAPI --> Sessions
+    FastAPI --> Router
+    Router --> Context
+    Router --> Retrieval
+    Context --> LLM
+    Retrieval --> Embed
+    Router --> LLM
+
+    classDef client fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    classDef api fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    classDef core fill:#FAECE7,stroke:#993C1D,color:#4A1B0C
+    classDef ext fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+
+    class React,Streamlit client
+    class FastAPI,Sessions api
+    class Router,Retrieval,Context core
+    class LLM,Embed ext
+```
+
+The dashed line shows the one deliberate architectural shortcut: the Streamlit
+prototype imports the core RAG logic directly, bypassing FastAPI entirely.
+That's possible only because `rag_engine.py` has no dependency on either web
+framework — the same functions serve both interfaces unchanged.
+
 ```
 Raggy2/
 ├── backend/           FastAPI API — session-based, wraps rag_engine
@@ -48,12 +97,6 @@ Raggy2/
 └── streamlit_app/       Original prototype, kept as a lightweight fallback
     └── app.py
 ```
-
-The RAG logic (`rag_engine.py`) has no dependency on any particular
-interface — both the FastAPI backend and the Streamlit prototype call the
-exact same functions. This separation meant the core logic required no
-changes when the project moved from a single-script prototype to a
-client/server architecture with a dedicated frontend.
 
 ### Backend
 
@@ -101,6 +144,18 @@ streamlit run app.py
 Each part reads API keys from a `.env` file (`GROQ_API_KEY` and/or
 `OPENAI_API_KEY`). A key can also be supplied directly in the UI, which
 takes priority over the `.env` default.
+
+## Screenshots
+
+| Chat interface | Document manager |
+|---|---|
+| ![Main chat UI](docs/ui-overview.png) | ![Document manager popup](docs/document-manager.png) |
+
+**The three response modes:**
+
+| General | Fallback (ungrounded) | Grounded (RAG) |
+|---|---|---|
+| ![General mode](docs/scenario-general.png) | ![Fallback mode](docs/scenario-fallback.png) | ![RAG mode](docs/scenario-rag.png) |
 
 ## Design notes
 
