@@ -1,5 +1,6 @@
-.env
-venv/
+backend/.env
+node_modules/
 __pycache__/
 *.pyc
 .streamlit/
+venv/

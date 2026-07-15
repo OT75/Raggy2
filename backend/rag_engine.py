@@ -129,7 +129,7 @@ def answer_question(vectorstore, question, api_choice, api_key, chat_history=Non
         response = llm.invoke(messages)
         return response.content, [], "general_fallback", debug_info
 
-    best_score = min(score for _, score in docs_with_scores)
+    best_score = float(min(score for _, score in docs_with_scores))
     debug_info["best_score"] = best_score
 
     if best_score > score_threshold:
