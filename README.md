@@ -37,6 +37,66 @@ rather than a black box.
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    subgraph Indexing["Indexing — runs once, per document upload"]
+        direction TB
+        Upload(["PDF upload"])
+        Extract(["Extract text"])
+        Chunk(["Chunking"])
+        EmbedDocs(["Embed chunks"])
+        FAISS[("FAISS index")]
+        Upload --> Extract --> Chunk --> EmbedDocs --> FAISS
+    end
+
+    subgraph Answering["Answering — runs on every question"]
+        direction TB
+        Question(["User question + history"])
+        Context(["Query contextualization"])
+        HasDocs{"Documents<br/>indexed?"}
+        Retrieval(["Retrieval: embed query,<br/>search, score"])
+        PassesThreshold{"Score passes<br/>threshold?"}
+        General["General mode"]
+        Fallback["Fallback mode<br/>labeled ungrounded"]
+        RAG["RAG mode<br/>with citations"]
+        LLM(["LLM provider"])
+        Answer(["Answer shown to user<br/>with mode label"])
+
+        Question --> Context --> HasDocs
+        HasDocs -->|no| General
+        HasDocs -->|yes| Retrieval --> PassesThreshold
+        PassesThreshold -->|no| Fallback
+        PassesThreshold -->|yes| RAG
+        General --> LLM
+        Fallback --> LLM
+        RAG --> LLM
+        LLM --> Answer
+    end
+
+    FAISS -.->|searched by| Retrieval
+
+    classDef idx fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    classDef ans fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    classDef decision fill:#FBEAF0,stroke:#993556,color:#4B1528
+    classDef general fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    classDef fallback fill:#FAEEDA,stroke:#854F0B,color:#412402
+    classDef rag fill:#EAF3DE,stroke:#3B6D11,color:#173404
+
+    class Upload,Extract,Chunk,EmbedDocs,FAISS idx
+    class Question,Context,Retrieval,LLM,Answer ans
+    class HasDocs,PassesThreshold decision
+    class General general
+    class Fallback fallback
+    class RAG rag
+```
+
+Document embedding happens once, at upload time, and never touches the
+question-answering path. The only embedding that happens per question is
+embedding the query text itself, inside the retrieval step — a distinct,
+much smaller operation from indexing a whole document. Both apps below
+(Streamlit and FastAPI + React) run this exact logic; neither runtime shares
+state with the other.
+
 ```
 Raggy2/
 ├── backend/           FastAPI API — session-based, wraps rag_engine
@@ -48,12 +108,6 @@ Raggy2/
 └── streamlit_app/       Original prototype, kept as a lightweight fallback
     └── app.py
 ```
-
-The RAG logic (`rag_engine.py`) has no dependency on any particular
-interface — both the FastAPI backend and the Streamlit prototype call the
-exact same functions. This separation meant the core logic required no
-changes when the project moved from a single-script prototype to a
-client/server architecture with a dedicated frontend.
 
 ### Backend
 
@@ -101,6 +155,18 @@ streamlit run app.py
 Each part reads API keys from a `.env` file (`GROQ_API_KEY` and/or
 `OPENAI_API_KEY`). A key can also be supplied directly in the UI, which
 takes priority over the `.env` default.
+
+## Screenshots
+
+| Chat interface | Document manager |
+|---|---|
+| ![Main chat UI](docs/ui-overview.png) | ![Document manager popup](docs/document-manager.png) |
+
+**The three response modes:**
+
+| General | Fallback (ungrounded) | Grounded (RAG) |
+|---|---|---|
+| ![General mode](docs/scenario-general.png) | ![Fallback mode](docs/scenario-fallback.png) | ![RAG mode](docs/scenario-rag.png) |
 
 ## Design notes
 
