@@ -1,0 +1,10 @@
+streamlit
+langchain==0.3.27
+langchain-community==0.3.31
+langchain-openai==0.3.35
+langchain-groq==0.3.8
+langchain-text-splitters==0.3.11
+faiss-cpu
+PyPDF2
+python-dotenv
+sentence-transformers
