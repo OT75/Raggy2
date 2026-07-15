@@ -38,53 +38,63 @@ rather than a black box.
 ## Architecture
 
 ```mermaid
-graph TB
-    subgraph Client["Client layer"]
-        React["React + TypeScript UI<br/><span style='font-size:11px'>Vite dev server</span>"]
-        Streamlit["Streamlit prototype<br/><span style='font-size:11px'>fallback demo</span>"]
+flowchart TB
+    subgraph Indexing["Indexing — runs once, per document upload"]
+        direction TB
+        Upload(["PDF upload"])
+        Chunk(["Chunking"])
+        EmbedDocs(["Embed chunks"])
+        FAISS[("FAISS index")]
+        Upload --> Chunk --> EmbedDocs --> FAISS
     end
 
-    subgraph API["Backend"]
-        FastAPI["FastAPI<br/><span style='font-size:11px'>session-based endpoints</span>"]
-        Sessions[("In-memory sessions<br/><span style='font-size:11px'>vectorstore, documents, chat history</span>")]
+    subgraph Answering["Answering — runs on every question"]
+        direction TB
+        Question(["User question + history"])
+        Context(["Query contextualization"])
+        HasDocs{"Documents<br/>indexed?"}
+        Retrieval(["Retrieval: embed query,<br/>search, score"])
+        PassesThreshold{"Score passes<br/>threshold?"}
+        General["General mode"]
+        Fallback["Fallback mode<br/>labeled ungrounded"]
+        RAG["RAG mode<br/>with citations"]
+        LLM(["LLM provider"])
+        Answer(["Answer shown to user<br/>with mode label"])
+
+        Question --> Context --> HasDocs
+        HasDocs -->|no| General
+        HasDocs -->|yes| Retrieval --> PassesThreshold
+        PassesThreshold -->|no| Fallback
+        PassesThreshold -->|yes| RAG
+        General --> LLM
+        Fallback --> LLM
+        RAG --> LLM
+        LLM --> Answer
     end
 
-    subgraph Core["Core RAG logic — framework-agnostic"]
-        Router["Mode router<br/><span style='font-size:11px'>general / fallback / RAG</span>"]
-        Retrieval["Retrieval<br/><span style='font-size:11px'>FAISS similarity search + threshold</span>"]
-        Context["Query contextualization<br/><span style='font-size:11px'>history-aware rewriting</span>"]
-    end
+    FAISS -.->|searched by| Retrieval
 
-    subgraph External["External services"]
-        LLM["LLM provider<br/><span style='font-size:11px'>Groq or OpenAI</span>"]
-        Embed["Embeddings<br/><span style='font-size:11px'>HuggingFace local or OpenAI</span>"]
-    end
+    classDef idx fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    classDef ans fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    classDef decision fill:#FBEAF0,stroke:#993556,color:#4B1528
+    classDef general fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    classDef fallback fill:#FAEEDA,stroke:#854F0B,color:#412402
+    classDef rag fill:#EAF3DE,stroke:#3B6D11,color:#173404
 
-    React -->|HTTP + FormData| FastAPI
-    Streamlit -.->|direct import, no HTTP| Router
-    FastAPI --> Sessions
-    FastAPI --> Router
-    Router --> Context
-    Router --> Retrieval
-    Context --> LLM
-    Retrieval --> Embed
-    Router --> LLM
-
-    classDef client fill:#EEEDFE,stroke:#534AB7,color:#26215C
-    classDef api fill:#E1F5EE,stroke:#0F6E56,color:#04342C
-    classDef core fill:#FAECE7,stroke:#993C1D,color:#4A1B0C
-    classDef ext fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
-
-    class React,Streamlit client
-    class FastAPI,Sessions api
-    class Router,Retrieval,Context core
-    class LLM,Embed ext
+    class Upload,Chunk,EmbedDocs,FAISS idx
+    class Question,Context,Retrieval,LLM,Answer ans
+    class HasDocs,PassesThreshold decision
+    class General general
+    class Fallback fallback
+    class RAG rag
 ```
 
-The dashed line shows the one deliberate architectural shortcut: the Streamlit
-prototype imports the core RAG logic directly, bypassing FastAPI entirely.
-That's possible only because `rag_engine.py` has no dependency on either web
-framework — the same functions serve both interfaces unchanged.
+Document embedding happens once, at upload time, and never touches the
+question-answering path. The only embedding that happens per question is
+embedding the query text itself, inside the retrieval step — a distinct,
+much smaller operation from indexing a whole document. Both apps below
+(Streamlit and FastAPI + React) run this exact logic; neither runtime shares
+state with the other.
 
 ```
 Raggy2/
