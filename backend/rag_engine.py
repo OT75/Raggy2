@@ -45,12 +45,16 @@ def get_text_chunks(text):
     return text_splitter.split_text(text)
 
 
-def get_vectorstore(text_chunks, api_choice, api_key):
+def get_embeddings(api_choice, api_key):
+    """Returns the embeddings model alone, so callers can build a fresh FAISS
+    index OR add texts to an existing one without re-embedding what's already indexed."""
     if api_choice == "OpenAI" and api_key:
-        embeddings = OpenAIEmbeddings(api_key=api_key)
-    else:
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        return OpenAIEmbeddings(api_key=api_key)
+    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
+
+def get_vectorstore(text_chunks, api_choice, api_key):
+    embeddings = get_embeddings(api_choice, api_key)
     return FAISS.from_texts(texts=text_chunks, embedding=embeddings)
 
 
