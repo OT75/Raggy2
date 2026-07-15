@@ -1,5 +1,7 @@
 # 💠 Raggy
 
+[![Tests](https://github.com/OT75/Raggy/actions/workflows/tests.yml/badge.svg)](https://github.com/OT75/Raggy2/actions/workflows/tests.yml)
+
 A document-grounded assistant that answers questions from uploaded PDFs —
 with source citations, and honest disclosure when an answer isn't backed by
 your documents.
@@ -32,8 +34,10 @@ rather than a black box.
   not treated as isolated queries
 - **Source citations** — every grounded answer links back to the exact text
   it was built from
-- **Multi-provider support** — Groq (Llama 3.3 70B) or OpenAI (GPT-4o mini),
-  selectable per session, with an optional user-supplied API key
+- **Multi-provider generation** — Groq (Llama 3.3 70B) or OpenAI (GPT-4o mini)
+  for answering, selectable per session, with an optional user-supplied API
+  key. Embeddings always run locally (see Design notes) regardless of which
+  provider is selected for generation.
 
 ## Architecture
 
@@ -98,14 +102,22 @@ much smaller operation from indexing a whole document. Both apps below
 state with the other.
 
 ```
-Raggy2/
-├── backend/           FastAPI API — session-based, wraps rag_engine
+Raggy/
+├── .github/workflows/
+│   └── tests.yml       CI — runs the labeled eval on every push
+├── backend/             FastAPI API — session-based, wraps rag_engine
 │   ├── main.py
-│   ├── rag_engine.py  Core RAG logic, framework-agnostic
-│   └── requirements.txt
-├── frontend/           React + TypeScript client (Vite)
-│   └── src/App.tsx
-└── streamlit_app/       Original prototype, kept as a lightweight fallback
+│   ├── rag_engine.py    Core RAG logic, framework-agnostic
+│   ├── Dockerfile
+│   ├── Requirements.txt
+│   └── tests/
+│       ├── test_routing.py    Labeled routing + grounding eval
+│       └── fixtures/
+├── frontend/             React + TypeScript client (Vite)
+│   ├── src/App.tsx
+│   └── Dockerfile        Multi-stage build, served via nginx
+├── docker-compose.yml    Runs backend + frontend together
+└── streamlit_app/         Original prototype, kept as a lightweight fallback
     └── app.py
 ```
 
@@ -131,14 +143,20 @@ architecture evolved.
 
 ## Running it
 
-**Backend:**
+**With Docker (recommended — runs both services together):**
+```bash
+docker compose up --build
+```
+Frontend at `http://localhost:5173`, backend at `http://localhost:8000`.
+
+**Backend, without Docker:**
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install -r Requirements.txt
 uvicorn main:app --reload
 ```
 
-**Frontend:**
+**Frontend, without Docker:**
 ```bash
 cd frontend
 npm install
@@ -148,13 +166,41 @@ npm run dev
 **Streamlit (standalone alternative):**
 ```bash
 cd streamlit_app
-pip install -r requirements.txt
+pip install -r Requirements.txt
 streamlit run app.py
 ```
 
 Each part reads API keys from a `.env` file (`GROQ_API_KEY` and/or
 `OPENAI_API_KEY`). A key can also be supplied directly in the UI, which
-takes priority over the `.env` default.
+takes priority over the `.env` default. `.env` is never baked into a Docker
+image — it's excluded via `.dockerignore` and injected at container run time.
+
+## Testing
+
+A labeled routing eval (`backend/tests/test_routing.py`) checks two things
+against a real sample document: does the router pick the correct mode
+(general / fallback / grounded), and — for grounded answers — did retrieval
+actually surface the chunk containing the answer, not just any chunk.
+
+```bash
+cd backend
+pytest tests/test_routing.py -v
+```
+
+Current result: **18/20 (90%)**, with two cases marked as known, documented
+`xfail`s rather than failures. Both come from the same root cause: this
+eval is also what surfaced it. A single global similarity threshold cannot
+perfectly separate every case here — one genuinely out-of-scope question
+scored *lower* than several genuinely answerable ones. The threshold
+(`score_threshold=1.5` in `rag_engine.py`) was empirically tuned against
+this eval and chosen to favor the safer failure mode: an answerable question
+occasionally falling back, rather than an irrelevant question being
+presented as grounded. Before tuning, the same eval scored 12/20 (60%) at
+a guessed threshold of 1.0.
+
+CI (`.github/workflows/tests.yml`) runs this eval on every push. It needs a
+`GROQ_API_KEY` repository secret to actually execute — without one, it skips
+cleanly rather than failing on a missing secret.
 
 ## Screenshots
 
@@ -172,7 +218,22 @@ takes priority over the `.env` default.
 
 - **Score-based routing over LLM self-assessment.** Deciding "is this
   grounded?" via a similarity-score threshold, rather than asking the model
-  to judge its own relevance, keeps the decision inspectable and tunable.
+  to judge its own relevance, keeps the decision inspectable and tunable —
+  and testable, per the Testing section above.
+- **Threshold tuned empirically, not guessed.** The eval suite found real
+  overlap between answerable and out-of-scope questions at the score level;
+  no single threshold separates every case perfectly. See Testing above for
+  the specific numbers and the reasoning behind which failure mode the
+  current threshold favors.
+- **Embeddings are always local, regardless of which LLM provider is
+  selected.** Early on, embeddings followed whichever provider (Groq or
+  OpenAI) was active at the moment a document was added. That meant two
+  documents added under different provider selections could end up embedded
+  in incompatible vector spaces inside the same FAISS index — a latent
+  correctness bug, not just a cost/privacy tradeoff. Pinning embeddings to a
+  single local model (HuggingFace `all-MiniLM-L6-v2`) fixes that, keeps
+  document content off any third-party API, and costs nothing. The LLM
+  provider selection still only affects generation.
 - **Hand-rolled retrieval pipeline**, rather than a prebuilt LangChain
   chain. This traded some off-the-shelf robustness for full visibility into
   the retrieval-to-generation boundary, which was necessary while debugging
@@ -182,8 +243,8 @@ takes priority over the `.env` default.
 
 ## Stack
 
-Python, FastAPI, LangChain, FAISS, HuggingFace / OpenAI embeddings, Groq,
-OpenAI, React, TypeScript, Vite, Streamlit.
+Python, FastAPI, LangChain, FAISS, HuggingFace embeddings, pypdf, Groq,
+OpenAI, React, TypeScript, Vite, Streamlit, Docker, pytest, GitHub Actions.
 
 ## License
 
