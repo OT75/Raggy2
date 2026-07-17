@@ -109,7 +109,7 @@ Raggy/
 │   ├── main.py
 │   ├── rag_engine.py    Core RAG logic, framework-agnostic
 │   ├── Dockerfile
-│   ├── Requirements.txt
+│   ├── requirements.txt
 │   └── tests/
 │       ├── test_routing.py    Labeled routing + grounding eval
 │       └── fixtures/
@@ -152,7 +152,7 @@ Frontend at `http://localhost:5173`, backend at `http://localhost:8000`.
 **Backend, without Docker:**
 ```bash
 cd backend
-pip install -r Requirements.txt
+pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
@@ -166,7 +166,7 @@ npm run dev
 **Streamlit (standalone alternative):**
 ```bash
 cd streamlit_app
-pip install -r Requirements.txt
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
