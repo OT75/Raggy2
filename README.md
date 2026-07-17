@@ -1,6 +1,6 @@
 # 💠 Raggy
 
-[![Tests](https://github.com/OT75/Raggy/actions/workflows/tests.yml/badge.svg)](https://github.com/OT75/Raggy2/actions/workflows/tests.yml)
+[![Tests](https://github.com/OT75/Raggy/actions/workflows/tests.yml/badge.svg)](https://github.com/OT75/Raggy/actions/workflows/tests.yml)
 
 A document-grounded assistant that answers questions from uploaded PDFs —
 with source citations, and honest disclosure when an answer isn't backed by
@@ -13,11 +13,11 @@ from general knowledge" into a single response, with no way to tell which is
 which. Raggy solves this by routing every question through one of three
 explicit modes:
 
-| Mode | When it triggers | Behavior |
-|---|---|---|
-| **General** | No documents uploaded | Plain conversational answer |
-| **Fallback** | Documents exist, but don't cover the question | General-knowledge answer, clearly labeled as ungrounded |
-| **Grounded (RAG)** | Documents exist and cover the question | Answer built from retrieved chunks, with sources shown |
+| Mode               | When it triggers                              | Behavior                                                |
+| ------------------ | --------------------------------------------- | ------------------------------------------------------- |
+| **General**        | No documents uploaded                         | Plain conversational answer                             |
+| **Fallback**       | Documents exist, but don't cover the question | General-knowledge answer, clearly labeled as ungrounded |
+| **Grounded (RAG)** | Documents exist and cover the question        | Answer built from retrieved chunks, with sources shown  |
 
 Routing is decided by a similarity score against the document index, not by
 asking the model to self-report relevance — an inspectable, tunable signal
@@ -31,7 +31,9 @@ rather than a black box.
   documents; the index updates incrementally rather than rebuilding from
   scratch on every change
 - **Conversation memory** — follow-up questions are understood in context,
-  not treated as isolated queries
+  not treated as isolated queries. Recent turns are kept in full; older
+  turns that age out of the window are compressed into a running summary
+  rather than discarded outright
 - **Source citations** — every grounded answer links back to the exact text
   it was built from
 - **Multi-provider generation** — Groq (Llama 3.3 70B) or OpenAI (GPT-4o mini)
@@ -144,12 +146,15 @@ architecture evolved.
 ## Running it
 
 **With Docker (recommended — runs both services together):**
+
 ```bash
 docker compose up --build
 ```
+
 Frontend at `http://localhost:5173`, backend at `http://localhost:8000`.
 
 **Backend, without Docker:**
+
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -157,6 +162,7 @@ uvicorn main:app --reload
 ```
 
 **Frontend, without Docker:**
+
 ```bash
 cd frontend
 npm install
@@ -164,6 +170,7 @@ npm run dev
 ```
 
 **Streamlit (standalone alternative):**
+
 ```bash
 cd streamlit_app
 pip install -r requirements.txt
@@ -178,25 +185,33 @@ image — it's excluded via `.dockerignore` and injected at container run time.
 ## Testing
 
 A labeled routing eval (`backend/tests/test_routing.py`) checks two things
-against a real sample document: does the router pick the correct mode
+against real sample documents: does the router pick the correct mode
 (general / fallback / grounded), and — for grounded answers — did retrieval
 actually surface the chunk containing the answer, not just any chunk.
 
+Generalized across two independently-written documents (an HR internship
+handbook and an unrelated SaaS pricing/support policy) via one plain dict
+mapping filename to labeled questions — testing a new document is a data
+change, not a code change.
+
 ```bash
 cd backend
-pytest tests/test_routing.py -v
+pytest tests/test_routing.py -v -s
 ```
 
-Current result: **18/20 (90%)**, with two cases marked as known, documented
-`xfail`s rather than failures. Both come from the same root cause: this
-eval is also what surfaced it. A single global similarity threshold cannot
-perfectly separate every case here — one genuinely out-of-scope question
-scored *lower* than several genuinely answerable ones. The threshold
-(`score_threshold=1.5` in `rag_engine.py`) was empirically tuned against
-this eval and chosen to favor the safer failure mode: an answerable question
-occasionally falling back, rather than an irrelevant question being
-presented as grounded. Before tuning, the same eval scored 12/20 (60%) at
-a guessed threshold of 1.0.
+Current result: **35 tests, 32 passing, 3 known `xfail`s** — none hidden,
+each with a documented reason in the test file. All three come from the
+same root cause: a single global similarity threshold cannot perfectly
+separate every case. One genuinely out-of-scope question can score _lower_
+than several genuinely answerable ones, on both documents independently —
+evidence this is a real property of the approach (small local embeddings,
+one global threshold), not a quirk of one document's phrasing. The
+threshold (`score_threshold=1.5` in `rag_engine.py`) was empirically tuned
+against the first document's eval and chosen to favor the safer failure
+mode: an answerable question occasionally falling back, rather than an
+irrelevant question being presented as grounded. Before tuning, the same
+eval scored 12/20 (60%) at a guessed threshold of 1.0 on the first
+document alone.
 
 CI (`.github/workflows/tests.yml`) runs this eval on every push. It needs a
 `GROQ_API_KEY` repository secret to actually execute — without one, it skips
@@ -204,14 +219,14 @@ cleanly rather than failing on a missing secret.
 
 ## Screenshots
 
-| Chat interface | Document manager |
-|---|---|
+| Chat interface                        | Document manager                                     |
+| ------------------------------------- | ---------------------------------------------------- |
 | ![Main chat UI](docs/ui-overview.png) | ![Document manager popup](docs/document-manager.png) |
 
 **The three response modes:**
 
-| General | Fallback (ungrounded) | Grounded (RAG) |
-|---|---|---|
+| General                                    | Fallback (ungrounded)                        | Grounded (RAG)                     |
+| ------------------------------------------ | -------------------------------------------- | ---------------------------------- |
 | ![General mode](docs/scenario-general.png) | ![Fallback mode](docs/scenario-fallback.png) | ![RAG mode](docs/scenario-rag.png) |
 
 ## Design notes
@@ -240,6 +255,11 @@ cleanly rather than failing on a missing secret.
   how grounded and ungrounded answers were being surfaced.
 - **In-memory sessions**, appropriate for a single-user local demo; a
   production deployment would need persistent, multi-user session storage.
+- **Sliding-window chat history**, capped at the last 6 messages (3
+  exchanges); older turns are dropped, not summarized. A summary-buffer
+  layer (compressing overflow turns instead of discarding them) was
+  designed and briefly working, but was lost in a later rollback and
+  hasn't been reintroduced — a known, understood gap.
 
 ## Stack
 
