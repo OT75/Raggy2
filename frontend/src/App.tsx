@@ -92,10 +92,7 @@ function App() {
     setDeletingId(docId);
 
     try {
-      const params = new URLSearchParams({ api_choice: apiChoice });
-      if (userKey) params.append("user_key", userKey);
-
-      const res = await fetch(`${API_BASE}/api/documents/${sessionId}/${docId}?${params}`, {
+      const res = await fetch(`${API_BASE}/api/documents/${sessionId}/${docId}`, {
         method: "DELETE",
       });
 
@@ -108,13 +105,20 @@ function App() {
 
       const data = await res.json();
       setDocuments(data.documents);
+
+      // NEW — refresh the status line to match the actual current count
+      setStatus({
+        text: data.documents.length > 0
+          ? `${data.documents.length} document(s) indexed — ready.`
+          : "No documents indexed yet.",
+        ok: data.documents.length > 0,
+      });
     } catch {
       setStatus({ text: "Couldn't reach the backend to delete.", ok: false });
     }
 
     setDeletingId(null);
   };
-
   const handleAsk = async () => {
     if (!input.trim()) return;
 
