@@ -60,9 +60,6 @@ async def add_document(
     api_choice: str = Form(...),
     user_key: str = Form(None),
 ):
-    """Adds a single document to the session's knowledge base. Only this
-    document's chunks get embedded — existing documents in the vectorstore
-    are untouched, via FAISS's add_texts rather than rebuilding from scratch."""
     active_key = resolve_key(api_choice, user_key)
     if not active_key:
         raise HTTPException(status_code=400, detail="No API key available.")
@@ -74,24 +71,22 @@ async def add_document(
         raise HTTPException(status_code=400, detail="Couldn't extract text — file may be a scanned image.")
 
     chunks = get_text_chunks(raw_text)
+    chunk_ids = [str(uuid.uuid4()) for _ in chunks]  # NEW: stable ID per chunk
     embeddings = get_embeddings(api_choice, active_key)
 
     if session["vectorstore"] is None:
-        session["vectorstore"] = FAISS.from_texts(texts=chunks, embedding=embeddings)
+        session["vectorstore"] = FAISS.from_texts(texts=chunks, embedding=embeddings, ids=chunk_ids)
     else:
-        session["vectorstore"].add_texts(chunks)
+        session["vectorstore"].add_texts(chunks, ids=chunk_ids)
 
     doc_id = str(uuid.uuid4())
     session["documents"][doc_id] = {
         "filename": file.filename,
         "chunk_count": len(chunks),
-        "chunks": chunks,
+        "chunk_ids": chunk_ids,  # NEW: what we'll delete by
     }
 
-    return {
-        "session_id": session_id,
-        "documents": serialize_documents(session),
-    }
+    return {"session_id": session_id, "documents": serialize_documents(session)}
 
 
 @app.get("/api/documents/{session_id}")
@@ -103,36 +98,20 @@ async def list_documents(session_id: str):
 
 
 @app.delete("/api/documents/{session_id}/{doc_id}")
-async def delete_document(
-    session_id: str,
-    doc_id: str,
-    api_choice: str = "Groq (Free)",
-    user_key: str = None,
-):
-    """Removes one document and rebuilds the vectorstore from the remaining
-    documents' already-chunked text. This re-embeds the survivors (cheap —
-    no PDF re-parsing, and local embeddings are free) rather than attempting
-    row-level deletion inside FAISS, which is more fragile to get right."""
+async def delete_document(session_id: str, doc_id: str):
+    """Removes one document's vectors directly by ID — no re-embedding of
+    the survivors, no API key needed for this operation at all anymore."""
     session = sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     if doc_id not in session["documents"]:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    active_key = resolve_key(api_choice, user_key)
-    if not active_key:
-        raise HTTPException(status_code=400, detail="No API key available to rebuild the index.")
-
+    chunk_ids = session["documents"][doc_id]["chunk_ids"]
+    session["vectorstore"].delete(ids=chunk_ids)
     del session["documents"][doc_id]
 
-    remaining_chunks = [
-        chunk for doc in session["documents"].values() for chunk in doc["chunks"]
-    ]
-
-    if remaining_chunks:
-        embeddings = get_embeddings(api_choice, active_key)
-        session["vectorstore"] = FAISS.from_texts(texts=remaining_chunks, embedding=embeddings)
-    else:
+    if not session["documents"]:
         session["vectorstore"] = None
 
     return {"documents": serialize_documents(session)}
