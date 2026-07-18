@@ -181,3 +181,66 @@ def answer_question(vectorstore, question, api_choice, api_key, chat_history=Non
     messages = [("system", system_msg)] + history_messages + [("human", question)]
     response = llm.invoke(messages)
     return response.content, docs, "rag", debug_info
+
+
+async def answer_question_stream(vectorstore, question, api_choice, api_key, chat_history=None, score_threshold=1.5):
+    """
+    Async generator version of answer_question for streaming responses.
+
+    Performs routing (contextualize → retrieve → score) synchronously so the
+    mode decision is made before the first token is emitted, then streams the
+    final LLM response with llm.astream().
+
+    Yields:
+      (token: str,  None)         — one yield per text token during generation
+      (None, metadata: dict)      — single final yield with mode / sources / debug
+    """
+    llm = get_llm(api_choice, api_key)
+    history_messages = _build_history_messages(chat_history)
+    debug_info = {"search_query": None, "best_score": None}
+
+    # ── Routing (sync) ──────────────────────────────────────────────────────
+    if vectorstore is None:
+        messages = [("system", BASE_SYSTEM_PROMPT)] + history_messages + [("human", question)]
+        mode = "general"
+        docs = []
+    else:
+        search_query = contextualize_question(llm, question, history_messages)
+        debug_info["search_query"] = search_query
+        docs_with_scores = vectorstore.similarity_search_with_score(search_query, k=4)
+
+        if not docs_with_scores:
+            fallback_system = f"{BASE_SYSTEM_PROMPT}\n\n{FALLBACK_INSTRUCTION}"
+            messages = [("system", fallback_system)] + history_messages + [("human", question)]
+            mode = "general_fallback"
+            docs = []
+        else:
+            best_score = float(min(score for _, score in docs_with_scores))
+            debug_info["best_score"] = best_score
+
+            if best_score > score_threshold:
+                fallback_system = f"{BASE_SYSTEM_PROMPT}\n\n{FALLBACK_INSTRUCTION}"
+                messages = [("system", fallback_system)] + history_messages + [("human", question)]
+                mode = "general_fallback"
+                docs = []
+            else:
+                docs = [doc for doc, _ in docs_with_scores]
+                context = "\n\n".join(doc.page_content for doc in docs)
+                grounding_instruction = (
+                    "Answer the question using ONLY the context below. "
+                    "Be concise and cite specifics from the context where relevant.\n\n"
+                    f"Context:\n{context}"
+                )
+                system_msg = f"{BASE_SYSTEM_PROMPT}\n\n{grounding_instruction}"
+                messages = [("system", system_msg)] + history_messages + [("human", question)]
+                mode = "rag"
+
+    # ── Streaming ───────────────────────────────────────────────────────────
+    full_answer = ""
+    async for chunk in llm.astream(messages):
+        token = chunk.content
+        if token:
+            full_answer += token
+            yield token, None
+
+    yield None, {"mode": mode, "sources": docs, "debug": debug_info, "full_answer": full_answer}

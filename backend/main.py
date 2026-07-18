@@ -1,12 +1,15 @@
 from typing import List
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
 import os
 import uuid
+import json
 
-from rag_engine import get_pdf_text, get_text_chunks, get_embeddings, answer_question
+from rag_engine import get_pdf_text, get_text_chunks, get_embeddings, answer_question, answer_question_stream
 
 load_dotenv(override=True)
 
@@ -157,3 +160,69 @@ async def ask_question(
             "best_score": debug_info["best_score"],
         },
     }
+
+
+class AskStreamRequest(BaseModel):
+    question: str
+    api_choice: str
+    session_id: str | None = None
+    user_key: str = ""
+
+
+@app.post("/api/ask/stream")
+async def ask_question_stream(req: AskStreamRequest):
+    active_key = resolve_key(req.api_choice, req.user_key or None)
+    if not active_key:
+        async def _error():
+            yield f"data: {json.dumps({'error': 'No API key available.'})}{chr(10)}{chr(10)}"
+        return StreamingResponse(_error(), media_type="text/event-stream")
+
+    session_id, session = get_or_create_session(req.session_id)
+    history_for_call = session["messages"].copy()
+
+    async def generate():
+        full_answer = ""
+        try:
+            async for token, metadata in answer_question_stream(
+                session["vectorstore"],
+                req.question,
+                req.api_choice,
+                active_key,
+                chat_history=history_for_call,
+            ):
+                if token is not None:
+                    full_answer += token
+                    yield f"data: {json.dumps({'token': token})}{chr(10)}{chr(10)}"
+                else:
+                    mode = metadata["mode"]
+                    sources = metadata["sources"]
+                    debug_info = metadata["debug"]
+
+                    # Persist to session history after stream completes
+                    session["messages"].append({"role": "user", "content": req.question})
+                    session["messages"].append({
+                        "role": "assistant",
+                        "content": full_answer,
+                        "mode": mode,
+                        "sources": [doc.page_content[:300] for doc in sources],
+                    })
+
+                    done_event = {
+                        "done": True,
+                        "session_id": session_id,
+                        "mode": mode,
+                        "sources": [doc.page_content[:300] for doc in sources],
+                        "debug": {
+                            "search_query": debug_info["search_query"],
+                            "best_score": debug_info["best_score"],
+                        },
+                    }
+                    yield f"data: {json.dumps(done_event)}{chr(10)}{chr(10)}"
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}{chr(10)}{chr(10)}"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

@@ -31,6 +31,7 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [asking, setAsking] = useState(false);
+  const [streaming, setStreaming] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -120,41 +121,91 @@ function App() {
     setDeletingId(null);
   };
   const handleAsk = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || asking || streaming) return;
 
     const question = input;
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: question }]);
     setAsking(true);
 
-    const formData = new FormData();
-    if (sessionId) formData.append("session_id", sessionId);
-    formData.append("question", question);
-    formData.append("api_choice", apiChoice);
-    if (userKey) formData.append("user_key", userKey);
-
     try {
-      const res = await fetch(`${API_BASE}/api/ask`, { method: "POST", body: formData });
+      const res = await fetch(`${API_BASE}/api/ask/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          question,
+          api_choice: apiChoice,
+          user_key: userKey || "",
+        }),
+      });
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const err = await res.json();
         setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${err.detail}` }]);
         setAsking(false);
         return;
       }
 
-      const data = await res.json();
-      setSessionId(data.session_id);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.answer, mode: data.mode, sources: data.sources },
-      ]);
+      // Routing + retrieval finished — push a placeholder and start showing tokens
+      setAsking(false);
+      setStreaming(true);
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const raw = decoder.decode(value, { stream: true });
+        const lines = raw.split("\n").filter((l) => l.startsWith("data:"));
+
+        for (const line of lines) {
+          const payload = JSON.parse(line.slice(5).trim());
+
+          if (payload.error) {
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = { role: "assistant", content: `Error: ${payload.error}` };
+              return next;
+            });
+            setStreaming(false);
+            break outer;
+          }
+
+          if (payload.token) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              next[next.length - 1] = { ...last, content: last.content + payload.token };
+              return next;
+            });
+            // Groq is fast enough that tokens arrive faster than they're readable.
+            // A small artificial delay makes the streaming effect visible.
+            await new Promise<void>((r) => setTimeout(r, 20));
+          }
+
+          if (payload.done) {
+            setSessionId(payload.session_id);
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              next[next.length - 1] = { ...last, mode: payload.mode, sources: payload.sources };
+              return next;
+            });
+            setStreaming(false);
+          }
+        }
+      }
     } catch {
       setMessages((prev) => [...prev, { role: "assistant", content: "Couldn't reach the backend." }]);
+      setAsking(false);
+      setStreaming(false);
     }
-
-    setAsking(false);
   };
+
 
   return (
     <div className="app-shell">
@@ -247,7 +298,7 @@ function App() {
           {messages.map((msg, i) => (
             <div key={i} className={`msg-row ${msg.role}`}>
               <div className="msg-sender">{msg.role === "user" ? "You" : "Raggy"}</div>
-              <div className="bubble">
+              <div className={`bubble${streaming && i === messages.length - 1 && msg.role === "assistant" ? " streaming" : ""}`}>
                 {msg.content}
                 {msg.mode === "general_fallback" && (
                   <div className="mode-badge fallback">⚠ Not in your documents — general knowledge</div>
@@ -277,7 +328,7 @@ function App() {
             onKeyDown={(e) => e.key === "Enter" && handleAsk()}
             placeholder="Ask me anything..."
           />
-          <button className="btn btn-primary" onClick={handleAsk} disabled={asking}>
+          <button className="btn btn-primary" onClick={handleAsk} disabled={asking || streaming}>
             {asking ? <span className="spinner" /> : "Send"}
           </button>
         </div>
