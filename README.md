@@ -258,7 +258,7 @@ cleanly rather than failing on a missing secret.
 - **Sliding-window chat history**, capped at the last 6 messages (3
   exchanges); older turns are dropped, not summarized. A summary-buffer
   layer (compressing overflow turns instead of discarding them) was
-  designed and briefly working, and could be added baed on the avaialble resources.
+  designed and briefly working, and could be added baed on the available resources.
 
 ## Stack
 
